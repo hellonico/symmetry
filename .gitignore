@@ -1,0 +1,6 @@
+.clj-kondo/
+.cpcache/
+*.iml
+target
+output/
+.idea

@@ -1,0 +1,286 @@
+(ns parallel-ui.core
+  (:require [cljfx.api :as fx]
+            [clojure.java.io :as io]
+            [pyjama.io.parallelmap]
+            [pyjama.io.export]
+            [clojure.pprint]
+            [pyjama.parallel])
+  (:import (javafx.scene.input DragEvent TransferMode)))
+
+(def ollama-url (or (System/getenv "OLLAMA_URL") "http://localhost:11434"))
+
+(def app-state (atom {:url   ollama-url
+                      :tasks {}}))
+
+(defn task->row [id task]
+  ;(println task)
+  {:id     id
+   :model  (get-in task [:params :model])
+   :prompt (get-in task [:params :prompt])
+   :pre    (get-in task [:params :pre])
+   :result (:result task)})
+
+;(defn table-view [tasks]
+;  {:fx/type :table-view
+;   :columns [
+;             ;{:fx/type            :table-column
+;             ; :text               "Task ID"
+;             ; :cell-value-factory :id}
+;             {:fx/type            :table-column
+;              :text               "Model"
+;              :cell-value-factory :model}
+;             {:fx/type            :table-column
+;              :text               "Prompt"
+;              :cell-value-factory :prompt}
+;             ;{:fx/type            :table-column
+;             ; :text               "Pre-prompt"
+;             ; :cell-value-factory :pre}
+;             {:fx/type            :table-column
+;              :text               "Result"
+;              :cell-value-factory :result}]
+;   :items   (mapv (fn [[id task]] (task->row id task)) tasks)})
+
+;
+; OPTION1
+;
+(defn table-view [tasks]
+  (let [total-width 800
+        result-width (* 0.9 total-width)
+        other-width (/ (* 0.2 total-width) 2)]
+    {:fx/type :table-view
+     :columns [
+               ;{:fx/type   :table-column
+               ; :text      "Task ID"
+               ; :cell-value-factory :id
+               ; :pref-width other-width}
+               {:fx/type            :table-column
+                :text               "Model"
+                :cell-value-factory :model
+                :pref-width         other-width}
+               {:fx/type            :table-column
+                :text               "Prompt"
+                :cell-value-factory :prompt
+                :pref-width         other-width}
+               ;{:fx/type   :table-column
+               ; :text      "Pre-prompt"
+               ; :cell-value-factory :pre
+               ; :pref-width other-width}
+               {:fx/type            :table-column
+                :text               "Result"
+                :cell-value-factory :result
+                :pref-width         result-width}]
+     :items   (mapv (fn [[id task]] (task->row id task)) tasks)}))
+
+;
+; OPTION 2
+;
+
+(defn preprocess-data [tasks]
+  (let [grouped-by-prompt
+        (->> tasks
+             (vals)                                         ; Get all task values
+             (group-by (fn [task] (get-in task [:params :prompt]))) ; Group by prompt
+             (map (fn [[prompt task-list]]
+                    {:prompt  prompt
+                     :results (reduce (fn [acc task]
+                                        (assoc acc
+                                          (get-in task [:params :model]) ; Model name
+                                          (:result task)))  ; Result
+                                      {}
+                                      task-list)})))]
+    grouped-by-prompt))
+
+(defn table-view [tasks]
+  (let [rows (preprocess-data tasks)
+        models (->> tasks
+                    (vals)
+                    (map #(get-in % [:params :model]))
+                    distinct)]
+    {:fx/type :table-view
+     :columns (concat
+                [{:fx/type            :table-column
+                  :text               "Prompts"
+                  :cell-value-factory (fn [row] (:prompt row))
+                  :pref-width         200
+                  ;:cell-factory
+                  ;(fn [_]
+                  ;  {:fx/cell-type :text-area
+                  ;   :wrap-text    true})
+                  }]
+                (map (fn [model]
+                       {:fx/type            :table-column
+                        :text               model
+                        :cell-value-factory (fn [row]
+                                              (get-in row [:results model]))
+                        :pref-width         300
+                        ;:cell-factory
+                        ;(fn [_]
+                        ;  {:fx/cell-type :text-area
+                        ;   :wrap-text    true})
+                        })
+                     models))
+     :items   rows}))
+
+;
+; OPTION 3
+;
+
+(defn table-view [tasks]
+  (let [;tasks (:tasks @app-state)
+        rows (preprocess-data tasks)
+        models (->> tasks
+                    (vals)
+                    (map #(get-in % [:params :model]))
+                    distinct)
+        total (count tasks)                                 ; Total number of tasks
+        progress (count (filter :result (vals tasks)))      ; Tasks with results
+        progress-percentage (if (zero? total) 0 (/ progress total))]
+    {:fx/type :v-box
+     :children
+     [{:fx/type :table-view
+       :columns (concat
+                  [{:fx/type            :table-column
+                    :text               "Prompts"
+                    :cell-value-factory (fn [row] (:prompt row))
+                    :pref-width         200
+                    ;:cell-factory
+                    ;(fn [_]
+                    ;  {:fx/cell-type :text-area
+                    ;   :wrap-text    true})
+                    }]
+                  (map (fn [model]
+                         {:fx/type            :table-column
+                          :text               model
+                          :cell-value-factory (fn [row]
+                                                (get-in row [:results model]))
+                          :pref-width         300
+                          ;:cell-factory
+                          ;(fn [_]
+                          ;  {:fx/cell-type :text-area
+                          ;   :wrap-text    true})
+                          })
+                       models))
+       :items   rows}
+      {:fx/type   :v-box
+       :alignment :center
+       :spacing   5
+       :children
+       [{:fx/type    :progress-bar
+         :progress   progress-percentage
+         :pref-width Double/MAX_VALUE}                      ; Full width of the container
+        {:fx/type :label
+         :text    (str progress " / " total)
+         :style   {:-fx-font-size   14
+                   :-fx-font-weight "bold"}}]}]}))
+
+;
+; OPTION 4
+;
+
+(defn drag-drop-handler [event]
+  (let [db (.getDragboard event)
+        files (.getFiles db)
+        file (first files)]
+    (if (and file (.endsWith (.getName file) ".csv"))
+      (let [excel-data (pyjama.io.parallelmap/load-data file)
+            parallel-map (pyjama.io.parallelmap/construct-map excel-data)]
+        ;(clojure.pprint/pprint parallel-map)
+        (pyjama.parallel/parallel-generate app-state
+                           parallel-map
+                           identity
+                           (fn [results] ))))))
+
+(defn table-view [tasks]
+  (let [rows (preprocess-data tasks)
+        models (->> tasks
+                    (vals)
+                    (map #(get-in % [:params :model]))
+                    distinct)
+        total (count tasks)                                 ; Total number of tasks
+        progress (count (filter :result (vals tasks)))      ; Tasks with results
+        progress-percentage (if (zero? total) 0 (/ progress total))]
+    {:fx/type :v-box
+     :spacing 10
+     :children
+     [
+      {:fx/type   :v-box
+       :alignment :center
+       :spacing   5
+       :children
+       [{:fx/type    :progress-bar
+         :progress   progress-percentage
+         :pref-width Double/MAX_VALUE}                      ; Full width of the container
+        {:fx/type :label
+         :text    (str progress " / " total)
+         :style   {:-fx-font-size   14
+                   :-fx-font-weight "bold"}}]}
+      {:fx/type         :table-view
+       :columns         (concat
+                          [{:fx/type            :table-column
+                            :text               "Prompts"
+                            :cell-value-factory (fn [row] (:prompt row))
+                            :pref-width         200}]
+                          (map (fn [model]
+                                 {:fx/type            :table-column
+                                  :text               model
+                                  :cell-value-factory (fn [row] (get-in row [:results model]))
+                                  :pref-width         300})
+                               models))
+       :items           rows
+       :on-drag-over    (fn [^DragEvent event]
+                          (let [db (.getDragboard event)]
+                            (when (.hasFiles db)
+                              (doto event
+                                (.acceptTransferModes (into-array TransferMode [TransferMode/COPY]))))))
+       :on-drag-dropped drag-drop-handler}                  ;; Set the drag-and-drop handler here
+      ]}))
+
+
+(defn handle-event [event]
+  (case (:event/type event)
+    :menu-item/open (pyjama.io.export/export-tasks-results @app-state "symmetry.csv")
+    :menu-item/exit (do (println "Exiting...") (System/exit 0))))
+
+(def menu-bar
+  {:fx/type :menu-bar
+   :menus   [{:fx/type :menu
+              :text    "File"
+              :items   [{:fx/type   :menu-item
+                         :text      "Save"
+                         :on-action {:event/type :menu-item/open}}
+                        {:fx/type   :menu-item
+                         :text      "Exit"
+                         :on-action {:event/type :menu-item/exit}}]}
+             ]})
+
+(defn root-view [{:keys [tasks]}]
+  {:fx/type :stage
+   :title   "Parallel Real-time Pyjamas"
+   :width   800
+   :showing true
+   :height  600
+   :scene   {:fx/type     :scene
+             :stylesheets #{(.toExternalForm (io/resource "terminal.css"))}
+             :root        {:fx/type  :v-box
+                           :children [
+                                      menu-bar
+                                      (table-view tasks)]}}})
+
+(def renderer
+  (fx/create-renderer
+    :middleware (fx/wrap-map-desc assoc :fx/type root-view)
+    :opts {
+           ;:fx.opt/map-event-handler #(println "Unhandled event:" %)
+           :fx.opt/map-event-handler handle-event
+           :app-state                app-state}))
+
+(defn -main []
+  (fx/mount-renderer app-state renderer)
+  ;(pyjama.parallel/parallel-generate app-state
+  ;                   {:models  ["tinyllama" "tinydolphin"]
+  ;                    :pre     "Explain in three points the following sentence:\n %s"
+  ;                    :prompts ["Why is the sky blue" "what color are the ninja turtles"]}
+  ;                   identity
+  ;                   (fn [results] (pprint @app-state)))
+  ;
+  )

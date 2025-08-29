@@ -1,0 +1,33 @@
+{:paths     ["src" "resources"]
+ :mvn/repos {"psiegman" {:url "https://raw.githubusercontent.com/psiegman/mvn-repo/master/releases/"}}
+ :aliases
+ {
+  :build-tools
+  {:exec-args {:app-name "Symmetry" :mainns parallel-ui.core :compile [parallel-ui.core]}
+   :deps
+   {
+    build-tools/build-tools
+    {:local/root "../build-tools"}
+    }}}
+ :deps      {org.clojure/clojure   {:mvn/version "1.11.1"}
+             hellonico/pyjama      {:local/root "../pyjama"}
+             hellonico/pyjama-io   {:local/root "../pyjama-io"}
+             hellonico/pyjama-fx
+             {
+              :local/root "../pyjama-fx"
+              }
+             ;hellonico/pyjama-pink {
+             ;                     :git/url "https://github.com/hellonico/origami-pink.git"
+             ;                     :deps/root "pink"
+             ;                     :git/branch "master"  ;; Or "master" depending on the repo
+             ;                     :git/sha "FETCH_HEAD"
+             ;                     }
+             hellonico/pyjama-pink {
+                                    :local/root "../origami-pink/pink"
+                                    ;:git/url    "https://github.com/hellonico/origami-pink.git"
+                                    ;:deps/root  "pink"
+                                    ;:git/branch "main"          ;; Or "master" depending on the repo
+                                    ;:git/sha    "FETCH_HEAD"
+                                    }
+
+             }}
